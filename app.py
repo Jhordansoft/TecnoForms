@@ -6,7 +6,10 @@ import numpy as np
 from PIL import Image, ImageOps
 from pathlib import Path
 
+# --------------------------------
 # CONFIGURACIÓN
+# --------------------------------
+
 st.set_page_config(
     page_title="TecnoForms",
     page_icon="🔢",
@@ -17,15 +20,27 @@ st.title("🔢 TecnoForms")
 st.subheader("Clasificación de Dígitos Manuscritos")
 
 st.write(
-    "Sube una imagen de un número escrito a mano "
+    "Sube una imagen con un único número escrito a mano "
     "y nuestra inteligencia artificial lo reconocerá."
 )
 
+
+# --------------------------------
 # CARGAR MODELO
+# --------------------------------
+
 @st.cache_resource
 def load_model():
     ruta = Path(__file__).parent / "modelo_digitos.keras"
-    return tf.keras.models.load_model(ruta, compile=False)
+
+    if not ruta.exists():
+        raise FileNotFoundError("No se encontró el modelo entrenado.")
+
+    return tf.keras.models.load_model(
+        ruta,
+        compile=False
+    )
+
 
 try:
     model = load_model()
@@ -35,62 +50,146 @@ except Exception as e:
     st.stop()
 
 
-# PROCESAMIENTO DE IMAGEN
+# --------------------------------
+# UMBRAL AUTOMÁTICO (OTSU)
+# --------------------------------
+
+def calcular_umbral(image):
+
+    pixels = np.asarray(image)
+
+    histograma = np.bincount(
+        pixels.flatten(),
+        minlength=256
+    )
+
+    total = pixels.size
+    suma_total = np.dot(np.arange(256), histograma)
+
+    suma_fondo = 0
+    peso_fondo = 0
+    mejor_varianza = 0
+    umbral = 127
+
+    for i in range(256):
+
+        peso_fondo += histograma[i]
+
+        if peso_fondo == 0:
+            continue
+
+        peso_objeto = total - peso_fondo
+
+        if peso_objeto == 0:
+            break
+
+        suma_fondo += i * histograma[i]
+
+        media_fondo = suma_fondo / peso_fondo
+        media_objeto = (
+            suma_total - suma_fondo
+        ) / peso_objeto
+
+        varianza = (
+            peso_fondo * peso_objeto *
+            (media_fondo - media_objeto) ** 2
+        )
+
+        if varianza > mejor_varianza:
+            mejor_varianza = varianza
+            umbral = i
+
+    return umbral
+
+
+# --------------------------------
+# PREPROCESAMIENTO
+# --------------------------------
+
 def procesar_imagen(image):
 
+    # Escala de grises
     image = ImageOps.grayscale(image)
+
+    # Mejorar contraste
     image = ImageOps.autocontrast(image)
 
-    # Invertir colores si el fondo es blanco
-    if np.mean(image) > 127:
+    # Detectar el color del fondo usando los bordes
+    pixels = np.asarray(image)
+
+    borde = np.concatenate([
+        pixels[0, :],
+        pixels[-1, :],
+        pixels[:, 0],
+        pixels[:, -1]
+    ])
+
+    # MNIST utiliza fondo negro y trazos blancos
+    if np.median(borde) > 127:
         image = ImageOps.invert(image)
 
-    # Detectar el número
-    mask = image.point(lambda p: 255 if p > 35 else 0)
+    # Calcular umbral automático
+    umbral = calcular_umbral(image)
+
+    # Crear máscara para detectar el dígito
+    mask = image.point(
+        lambda p: 255 if p > umbral else 0
+    )
+
     bbox = mask.getbbox()
 
     if bbox is None:
-        raise ValueError("No se detectó ningún dígito.")
+        raise ValueError("No se pudo detectar ningún dígito.")
 
-    image = image.crop(bbox)
+    # Recortar el número
+    digit = image.crop(bbox)
 
-    # Ajustar conservando proporciones
-    width, height = image.size
+    width, height = digit.size
+
+    # Conservar proporciones y ajustar a 20x20
     scale = min(20 / width, 20 / height)
 
     new_width = max(1, round(width * scale))
     new_height = max(1, round(height * scale))
 
-    image = image.resize(
+    digit = digit.resize(
         (new_width, new_height),
         Image.Resampling.LANCZOS
     )
 
-    # Crear lienzo de 28x28
+    # Lienzo negro de 28x28
     canvas = Image.new("L", (28, 28), 0)
 
+    # Centrar el número
     x = (28 - new_width) // 2
     y = (28 - new_height) // 2
 
-    canvas.paste(image, (x, y))
+    canvas.paste(digit, (x, y))
 
+    # Normalización
     array = np.asarray(canvas).astype("float32") / 255.0
+
+    # Dimensiones para CNN
     array = np.expand_dims(array, axis=(0, -1))
 
     return canvas, array
 
 
+# --------------------------------
 # SUBIR IMAGEN
+# --------------------------------
+
 st.divider()
 
 archivo = st.file_uploader(
-    "Selecciona una imagen con un solo número",
+    "Selecciona una imagen con un solo dígito",
     type=["png", "jpg", "jpeg"]
 )
 
 if archivo is not None:
 
     try:
+
         original = Image.open(archivo).convert("RGB")
 
         if original.width * original.height > 12000000:
@@ -99,50 +198,90 @@ if archivo is not None:
 
         procesada, entrada = procesar_imagen(original)
 
+        # Mostrar imágenes
+        st.markdown("### Procesamiento de imagen")
+
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("**Imagen original**")
-            st.image(original, use_container_width=True)
-
-        with col2:
-            st.markdown("**Imagen procesada**")
+            st.write("Imagen original")
             st.image(
-                procesada.resize((280, 280)),
+                np.asarray(original),
+                channels="RGB",
                 use_container_width=True
             )
 
+        with col2:
+            st.write("Imagen procesada (28x28)")
+            st.image(
+                np.asarray(procesada),
+                clamp=True,
+                use_container_width=True
+            )
+
+        # --------------------------------
         # PREDICCIÓN
-        resultado = model.predict(entrada, verbose=0)[0]
+        # --------------------------------
+
+        resultado = model.predict(
+            entrada,
+            verbose=0
+        )[0]
 
         numero = int(np.argmax(resultado))
         confianza = float(resultado[numero]) * 100
 
         st.divider()
 
-        st.markdown("### Resultado del reconocimiento")
+        st.markdown("### 🧠 Resultado del reconocimiento")
 
         st.metric(
-            "Dígito identificado",
-            numero,
-            f"{confianza:.2f}% de confianza"
+            label="Dígito identificado",
+            value=str(numero),
+            delta=f"{confianza:.2f}% de confianza"
         )
 
-        if confianza >= 70:
-            st.success("¡Dígito reconocido!")
-        else:
-            st.warning("Confianza baja. Intenta con otra imagen.")
+        if confianza >= 80:
+            st.success("Reconocimiento con confianza alta.")
 
-        st.markdown("### Probabilidad por dígito")
+        elif confianza >= 50:
+            st.warning("Reconocimiento con confianza moderada.")
+
+        else:
+            st.error(
+                "El modelo tiene dificultades para reconocer "
+                "este número. Intenta con otra imagen."
+            )
+
+        # --------------------------------
+        # PROBABILIDADES
+        # --------------------------------
+
+        st.markdown("### 📊 Probabilidad por dígito")
 
         st.bar_chart({
-            str(i): float(resultado[i])
+            str(i): float(resultado[i]) * 100
             for i in range(10)
         })
+
+        # Mostrar las tres predicciones principales
+        st.markdown("### Tres predicciones principales")
+
+        mejores = np.argsort(resultado)[-3:][::-1]
+
+        for i in mejores:
+            st.write(
+                f"Dígito **{i}**: "
+                f"{resultado[i] * 100:.2f}%"
+            )
 
     except Exception as e:
         st.error(f"Error al procesar la imagen: {e}")
 
+
 st.divider()
 
-st.caption("TecnoForms | Machine Learning y Deep Learning")
+st.caption(
+    "TecnoForms | Clasificación mediante "
+    "Redes Neuronales Convolucionales (CNN)"
+)
