@@ -5,11 +5,12 @@ import numpy as np
 
 from PIL import Image, ImageOps
 from pathlib import Path
+import io
 
 
-# ==========================================
-# 1. CONFIGURACION
-# ==========================================
+# =====================================================
+# 1. CONFIGURACIÓN
+# =====================================================
 
 st.set_page_config(
     page_title="TecnoForms",
@@ -21,14 +22,14 @@ st.title("🔢 TecnoForms")
 st.subheader("Clasificación de Dígitos Manuscritos")
 
 st.write(
-    "Sube una imagen con un único número escrito a mano "
-    "y nuestra inteligencia artificial lo reconocerá."
+    "Sube una imagen que contenga un único número escrito "
+    "a mano y nuestra red neuronal intentará reconocerlo."
 )
 
 
-# ==========================================
+# =====================================================
 # 2. CARGAR MODELO
-# ==========================================
+# =====================================================
 
 @st.cache_resource
 def load_model():
@@ -37,31 +38,33 @@ def load_model():
 
     if not ruta.exists():
         raise FileNotFoundError(
-            "No se encontró modelo_digitos.keras"
+            f"No se encontró el modelo: {ruta}"
         )
 
-    return tf.keras.models.load_model(
+    modelo = tf.keras.models.load_model(
         ruta,
         compile=False
     )
 
+    return modelo
+
 
 try:
     model = load_model()
-    st.success("Red neuronal cargada correctamente.v5")
+    st.success("✅ Red neuronal cargada correctamente.")
 
 except Exception as e:
     st.error(f"Error al cargar el modelo: {e}")
     st.stop()
 
 
-# ==========================================
-# 3. CALCULAR UMBRAL OTSU
-# ==========================================
+# =====================================================
+# 3. UMBRALIZACIÓN DE OT SU
+# =====================================================
 
-def calcular_umbral(image):
+def calcular_umbral_otsu(imagen):
 
-    pixels = np.asarray(image)
+    pixels = np.asarray(imagen, dtype=np.uint8)
 
     histograma = np.bincount(
         pixels.ravel(),
@@ -69,13 +72,14 @@ def calcular_umbral(image):
     )
 
     total = pixels.size
+
     suma_total = np.dot(
         np.arange(256),
         histograma
     )
 
-    suma_fondo = 0
     peso_fondo = 0
+    suma_fondo = 0
     mejor_varianza = -1
     umbral = 127
 
@@ -100,31 +104,72 @@ def calcular_umbral(image):
         ) / peso_objeto
 
         varianza = (
-            peso_fondo * peso_objeto *
+            peso_fondo *
+            peso_objeto *
             (media_fondo - media_objeto) ** 2
         )
 
         if varianza > mejor_varianza:
+
             mejor_varianza = varianza
             umbral = i
 
-    return umbral
+    return int(umbral)
 
 
-# ==========================================
-# 4. PREPROCESAMIENTO DE IMAGEN
-# ==========================================
+# =====================================================
+# 4. CENTRAR IMAGEN POR CENTRO DE MASA
+# =====================================================
+
+def centrar_digito(imagen):
+
+    array = np.asarray(
+        imagen,
+        dtype=np.float32
+    )
+
+    total = np.sum(array)
+
+    if total <= 0:
+        raise ValueError("El dígito está vacío.")
+
+    yy, xx = np.indices(array.shape)
+
+    centro_x = np.sum(xx * array) / total
+    centro_y = np.sum(yy * array) / total
+
+    desplazamiento_x = 13.5 - centro_x
+    desplazamiento_y = 13.5 - centro_y
+
+    imagen_centrada = imagen.transform(
+        (28, 28),
+        Image.Transform.AFFINE,
+        (
+            1, 0, -desplazamiento_x,
+            0, 1, -desplazamiento_y
+        ),
+        resample=Image.Resampling.BILINEAR,
+        fillcolor=0
+    )
+
+    return imagen_centrada
 
 
-def procesar_imagen(image):
+# =====================================================
+# 5. PREPROCESAMIENTO
+# =====================================================
 
-    # 1. Convertir a escala de grises
-    image = ImageOps.grayscale(image)
-    image = ImageOps.autocontrast(image)
+def procesar_imagen(imagen_original):
 
-    pixels = np.asarray(image)
+    # Convertir a escala de grises
+    gris = ImageOps.grayscale(imagen_original)
 
-    # 2. Detectar fondo mediante los bordes
+    # Mejorar contraste
+    gris = ImageOps.autocontrast(gris)
+
+    pixels = np.asarray(gris)
+
+    # Detectar el color del fondo utilizando los bordes
     borde = np.concatenate([
         pixels[0, :],
         pixels[-1, :],
@@ -132,83 +177,103 @@ def procesar_imagen(image):
         pixels[:, -1]
     ])
 
-    # Convertir a fondo negro y trazos blancos
-    if np.median(borde) > 127:
-        image = ImageOps.invert(image)
+    # MNIST utiliza fondo negro y dígito blanco
+    if np.median(borde) < 127:
+        gris = ImageOps.invert(gris)
 
-    # 3. Umbral Otsu
-    umbral = calcular_umbral(image)
+    # Calcular umbral Otsu
+    umbral = calcular_umbral_otsu(gris)
 
-    # 4. Crear máscara
-    mask = image.point(
+    # Crear imagen binaria
+    mascara = gris.point(
         lambda p: 255 if p > umbral else 0
     )
 
-    bbox = mask.getbbox()
+    # Encontrar límites del dígito
+    bbox = mascara.getbbox()
 
     if bbox is None:
-        raise ValueError("No se detectó ningún dígito.")
+        raise ValueError(
+            "No se detectó ningún dígito. "
+            "Intenta subir otra imagen."
+        )
 
-    # 5. Recortar el número
-    digit = image.crop(bbox)
+    # Recortar utilizando la máscara
+    digito = mascara.crop(bbox)
 
-    # 6. Ajustar a 20x20 sin deformar
-    width, height = digit.size
+    ancho, alto = digito.size
 
-    scale = min(20 / width, 20 / height)
+    # Evitar deformaciones
+    escala = min(
+        20 / ancho,
+        20 / alto
+    )
 
-    new_width = max(1, round(width * scale))
-    new_height = max(1, round(height * scale))
+    nuevo_ancho = max(
+        1, round(ancho * escala)
+    )
 
-    digit = digit.resize(
-        (new_width, new_height),
+    nuevo_alto = max(
+        1, round(alto * escala)
+    )
+
+    digito = digito.resize(
+        (nuevo_ancho, nuevo_alto),
         Image.Resampling.LANCZOS
     )
 
-    # 7. Crear lienzo de 28x28
-    canvas = Image.new("L", (28, 28), 0)
+    # Crear lienzo de 28x28
+    lienzo = Image.new(
+        "L",
+        (28, 28),
+        0
+    )
 
-    x = (28 - new_width) // 2
-    y = (28 - new_height) // 2
+    x = (28 - nuevo_ancho) // 2
+    y = (28 - nuevo_alto) // 2
 
-    canvas.paste(digit, (x, y))
+    lienzo.paste(
+        digito,
+        (x, y)
+    )
 
-    # 8. Centrar según el centro de masa
-    array = np.asarray(canvas).astype("float32")
+    # Centrar mediante centro de masa
+    lienzo = centrar_digito(lienzo)
 
-    total = np.sum(array)
+    # Normalizar valores entre 0 y 1
+    array = np.asarray(
+        lienzo,
+        dtype=np.float32
+    ) / 255.0
 
-    if total > 0:
+    # Preparar entrada según la arquitectura del modelo
+    forma_entrada = model.input_shape
 
-        yy, xx = np.indices(array.shape)
-
-        centro_x = np.sum(xx * array) / total
-        centro_y = np.sum(yy * array) / total
-
-        desplazamiento_x = round(13.5 - centro_x)
-        desplazamiento_y = round(13.5 - centro_y)
-
-        canvas = canvas.transform(
-            (28, 28),
-            Image.Transform.AFFINE,
-            (
-                1, 0, -desplazamiento_x,
-                0, 1, -desplazamiento_y
-            ),
-            resample=Image.Resampling.BILINEAR
+    if isinstance(forma_entrada, list):
+        raise ValueError(
+            "Este código requiere un modelo con una sola entrada."
         )
 
-    # 9. Normalizar
-    array = np.asarray(canvas).astype("float32") / 255.0
+    if len(forma_entrada) == 4:
 
-    # 10. Preparar entrada CNN
-    entrada = np.expand_dims(array, axis=(0, -1))
+        entrada = array[np.newaxis, ..., np.newaxis]
 
-    return canvas, entrada
+    elif len(forma_entrada) == 3:
 
-# ==========================================
-# 5. SUBIR IMAGEN
-# ==========================================
+        entrada = array[np.newaxis, ...]
+
+    else:
+
+        raise ValueError(
+            f"Arquitectura de entrada no compatible: {forma_entrada}"
+        )
+
+    return lienzo, entrada, mascara
+
+
+# =====================================================
+# 6. SUBIR IMAGEN
+# =====================================================
 
 st.divider()
 
@@ -216,71 +281,85 @@ st.markdown("### 📤 Subir imagen")
 
 archivo = st.file_uploader(
     "Selecciona una imagen con un solo dígito",
-    type=["png", "jpg", "jpeg"]
+    type=["png", "jpg", "jpeg"],
+    help="Se recomienda una imagen con un número claramente visible."
 )
 
 
-# ==========================================
-# 6. PROCESAR Y RECONOCER
-# ==========================================
+# =====================================================
+# 7. PROCESAR Y RECONOCER
+# =====================================================
 
 if archivo is not None:
 
     try:
 
         # Abrir imagen
+        archivo.seek(0)
+
         original = Image.open(archivo).convert("RGB")
 
-        # Comprobar tamaño
-        if original.width * original.height > 12000000:
+        # Validar tamaño
+        if original.width * original.height > 12_000_000:
+
             st.error("La imagen es demasiado grande.")
             st.stop()
 
         # Procesar imagen
-        procesada, entrada = procesar_imagen(original)
+        procesada, entrada, mascara = procesar_imagen(
+            original
+        )
 
-       
-# ----------------------------------
-# MOSTRAR IMAGENES
-# ----------------------------------
+        # ---------------------------------------------
+        # MOSTRAR IMÁGENES
+        # ---------------------------------------------
 
-import io
+        st.divider()
 
-st.divider()
-st.markdown("### 🖼️ Procesamiento de imagen")
+        st.markdown("### 🖼️ Procesamiento de imagen")
 
-col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-# Convertir la imagen original a PNG en memoria
-buffer_original = io.BytesIO()
-original.save(buffer_original, format="PNG")
+        with col1:
 
-# Convertir la imagen procesada a PNG en memoria
-buffer_procesada = io.BytesIO()
-procesada.resize(
-    (280, 280),
-    Image.Resampling.NEAREST
-).save(buffer_procesada, format="PNG")
+            st.write("**Imagen original**")
 
-with col1:
-    st.write("**Imagen original**")
-    st.image(
-        buffer_original.getvalue(),
-        caption="Imagen subida",
-        width="stretch"
-    )
+            st.image(
+                original,
+                caption="Imagen subida",
+                width="stretch"
+            )
 
-with col2:
-    st.write("**Imagen procesada (28x28)**")
-    st.image(
-        buffer_procesada.getvalue(),
-        caption="Entrada de la red neuronal",
-        width="stretch"
-    )
+        with col2:
 
-        # ----------------------------------
-        # DIAGNOSTICO
-        # ----------------------------------
+            st.write("**Imagen procesada (28 × 28)**")
+
+            imagen_ampliada = procesada.resize(
+                (280, 280),
+                Image.Resampling.NEAREST
+            )
+
+            st.image(
+                imagen_ampliada,
+                caption="Entrada de la red neuronal",
+                width="stretch"
+            )
+
+        # ---------------------------------------------
+        # MÁSCARA BINARIA
+        # ---------------------------------------------
+
+        with st.expander("Ver máscara de segmentación"):
+
+            st.image(
+                mascara,
+                caption="Detección del dígito",
+                width="stretch"
+            )
+
+        # ---------------------------------------------
+        # DIAGNÓSTICO
+        # ---------------------------------------------
 
         with st.expander("Ver diagnóstico de la imagen"):
 
@@ -306,30 +385,77 @@ with col2:
                 entrada.shape
             )
 
-        # ----------------------------------
-        # PREDICCION
-        # ----------------------------------
+            st.write(
+                "Arquitectura esperada:",
+                model.input_shape
+            )
+
+            st.write(
+                "Tipo de datos:",
+                str(entrada.dtype)
+            )
+
+        # ---------------------------------------------
+        # PREDICCIÓN
+        # ---------------------------------------------
+
+        st.divider()
+
+        st.markdown("### 🧠 Resultado del reconocimiento")
 
         resultado = model.predict(
             entrada,
             verbose=0
-        )[0]
+        )
 
-        numero = int(np.argmax(resultado))
+        resultado = np.asarray(
+            resultado[0],
+            dtype=np.float64
+        ).ravel()
+
+        if len(resultado) != 10:
+
+            raise ValueError(
+                "El modelo debe tener 10 salidas, "
+                "una por cada dígito del 0 al 9."
+            )
+
+        if not np.all(np.isfinite(resultado)):
+
+            raise ValueError(
+                "El modelo produjo valores no válidos."
+            )
+
+        # Comprobar si la salida ya contiene probabilidades
+        suma = np.sum(resultado)
+
+        if (
+            np.all(resultado >= 0) and
+            np.all(resultado <= 1) and
+            np.isclose(suma, 1.0, atol=0.01)
+        ):
+
+            probabilidades = resultado
+
+        else:
+
+            # Convertir logits a probabilidades
+            probabilidades = tf.nn.softmax(
+                resultado
+            ).numpy()
+
+        # Dígito más probable
+        numero = int(
+            np.argmax(probabilidades)
+        )
 
         confianza = float(
-            resultado[numero]
-        ) * 100
-
-        # ----------------------------------
-        # MOSTRAR RESULTADO
-        # ----------------------------------
-
-        st.divider()
-
-        st.markdown(
-            "### 🧠 Resultado del reconocimiento"
+            probabilidades[numero] * 100
         )
+
+        # ---------------------------------------------
+        # RESULTADO PRINCIPAL
+        # ---------------------------------------------
 
         st.metric(
             label="Dígito identificado",
@@ -356,36 +482,44 @@ with col2:
                 "reconocer este número."
             )
 
-        # ----------------------------------
-        # GRAFICO DE PROBABILIDADES
-        # ----------------------------------
+        # ---------------------------------------------
+        # PROBABILIDADES
+        # ---------------------------------------------
 
-        st.markdown(
-            "### 📊 Probabilidad por dígito"
-        )
+        st.markdown("### 📊 Probabilidad por dígito")
 
-        probabilidades = {
-            str(i): float(resultado[i]) * 100
+        probabilidades_dict = {
+            str(i): float(probabilidades[i] * 100)
             for i in range(10)
         }
 
-        st.bar_chart(probabilidades)
-
-        # ----------------------------------
-        # TRES MEJORES PREDICCIONES
-        # ----------------------------------
-
-        st.markdown(
-            "### 🔍 Tres predicciones principales"
+        st.bar_chart(
+            probabilidades_dict,
+            y_label="Probabilidad (%)"
         )
 
-        mejores = np.argsort(resultado)[-3:][::-1]
+        # ---------------------------------------------
+        # TRES MEJORES PREDICCIONES
+        # ---------------------------------------------
+
+        st.markdown("### 🔍 Tres predicciones principales")
+
+        mejores = np.argsort(
+            probabilidades
+        )[-3:][::-1]
 
         for i in mejores:
 
+            porcentaje = float(
+                probabilidades[i] * 100
+            )
+
             st.write(
-                f"**Dígito {i}:** "
-                f"{resultado[i] * 100:.2f}%"
+                f"**Dígito {i}:** {porcentaje:.2f}%"
+            )
+
+            st.progress(
+                float(probabilidades[i])
             )
 
     except Exception as e:
@@ -395,9 +529,9 @@ with col2:
         )
 
 
-# ==========================================
-# 7. PIE DE PAGINA
-# ==========================================
+# =====================================================
+# 8. PIE DE PÁGINA
+# =====================================================
 
 st.divider()
 
