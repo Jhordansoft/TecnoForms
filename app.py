@@ -48,7 +48,7 @@ def load_model():
 
 try:
     model = load_model()
-    st.success("Red neuronal cargada correctamente.v4")
+    st.success("Red neuronal cargada correctamente.v5")
 
 except Exception as e:
     st.error(f"Error al cargar el modelo: {e}")
@@ -115,17 +115,16 @@ def calcular_umbral(image):
 # 4. PREPROCESAMIENTO DE IMAGEN
 # ==========================================
 
+
 def procesar_imagen(image):
 
-    # Convertir a escala de grises
+    # 1. Convertir a escala de grises
     image = ImageOps.grayscale(image)
-
-    # Mejorar contraste
     image = ImageOps.autocontrast(image)
 
-    # Detectar el color del fondo mediante los bordes
     pixels = np.asarray(image)
 
+    # 2. Detectar fondo mediante los bordes
     borde = np.concatenate([
         pixels[0, :],
         pixels[-1, :],
@@ -133,14 +132,14 @@ def procesar_imagen(image):
         pixels[:, -1]
     ])
 
-    # Si el fondo es blanco, invertir colores
+    # Convertir a fondo negro y trazos blancos
     if np.median(borde) > 127:
         image = ImageOps.invert(image)
 
-    # Calcular umbral automático
+    # 3. Umbral Otsu
     umbral = calcular_umbral(image)
 
-    # Eliminar ruido y detectar el dígito
+    # 4. Crear máscara
     mask = image.point(
         lambda p: 255 if p > umbral else 0
     )
@@ -148,30 +147,15 @@ def procesar_imagen(image):
     bbox = mask.getbbox()
 
     if bbox is None:
-        raise ValueError(
-            "No se detectó ningún número. "
-            "Prueba con una imagen más clara."
-        )
+        raise ValueError("No se detectó ningún dígito.")
 
-    # Recortar el dígito usando su área detectada
+    # 5. Recortar el número
     digit = image.crop(bbox)
 
-    # Eliminar píxeles débiles del fondo
-    digit = digit.point(
-        lambda p: p if p > umbral else 0
-    )
-
+    # 6. Ajustar a 20x20 sin deformar
     width, height = digit.size
 
-    # Evitar divisiones incorrectas
-    if width == 0 or height == 0:
-        raise ValueError("El dígito no tiene dimensiones válidas.")
-
-    # Ajustar a 20x20 conservando proporciones
-    scale = min(
-        20 / width,
-        20 / height
-    )
+    scale = min(20 / width, 20 / height)
 
     new_width = max(1, round(width * scale))
     new_height = max(1, round(height * scale))
@@ -181,32 +165,46 @@ def procesar_imagen(image):
         Image.Resampling.LANCZOS
     )
 
-    # Crear lienzo negro de 28x28
-    canvas = Image.new(
-        "L",
-        (28, 28),
-        0
-    )
+    # 7. Crear lienzo de 28x28
+    canvas = Image.new("L", (28, 28), 0)
 
-    # Centrar el dígito
     x = (28 - new_width) // 2
     y = (28 - new_height) // 2
 
     canvas.paste(digit, (x, y))
 
-    # Normalizar entre 0 y 1
-    array = np.asarray(
-        canvas
-    ).astype("float32") / 255.0
+    # 8. Centrar según el centro de masa
+    array = np.asarray(canvas).astype("float32")
 
-    # Agregar dimensiones para CNN
-    array = np.expand_dims(
-        array,
-        axis=(0, -1)
-    )
+    total = np.sum(array)
 
-    return canvas, array
+    if total > 0:
 
+        yy, xx = np.indices(array.shape)
+
+        centro_x = np.sum(xx * array) / total
+        centro_y = np.sum(yy * array) / total
+
+        desplazamiento_x = round(13.5 - centro_x)
+        desplazamiento_y = round(13.5 - centro_y)
+
+        canvas = canvas.transform(
+            (28, 28),
+            Image.Transform.AFFINE,
+            (
+                1, 0, -desplazamiento_x,
+                0, 1, -desplazamiento_y
+            ),
+            resample=Image.Resampling.BILINEAR
+        )
+
+    # 9. Normalizar
+    array = np.asarray(canvas).astype("float32") / 255.0
+
+    # 10. Preparar entrada CNN
+    entrada = np.expand_dims(array, axis=(0, -1))
+
+    return canvas, entrada
 
 # ==========================================
 # 5. SUBIR IMAGEN
@@ -241,39 +239,44 @@ if archivo is not None:
         # Procesar imagen
         procesada, entrada = procesar_imagen(original)
 
-        # ----------------------------------
-        # MOSTRAR IMAGENES
-        # ----------------------------------
+       
+# ----------------------------------
+# MOSTRAR IMAGENES
+# ----------------------------------
 
-        st.divider()
-        st.markdown("### 🖼️ Procesamiento de imagen")
+import io
 
-        col1, col2 = st.columns(2)
+st.divider()
+st.markdown("### 🖼️ Procesamiento de imagen")
 
-        with col1:
+col1, col2 = st.columns(2)
 
-            st.write("**Imagen original**")
+# Convertir la imagen original a PNG en memoria
+buffer_original = io.BytesIO()
+original.save(buffer_original, format="PNG")
 
-            st.image(
-                original,
-                caption="Imagen subida",
-                use_container_width=True
-            )
+# Convertir la imagen procesada a PNG en memoria
+buffer_procesada = io.BytesIO()
+procesada.resize(
+    (280, 280),
+    Image.Resampling.NEAREST
+).save(buffer_procesada, format="PNG")
 
-        with col2:
+with col1:
+    st.write("**Imagen original**")
+    st.image(
+        buffer_original.getvalue(),
+        caption="Imagen subida",
+        width="stretch"
+    )
 
-            st.write("**Imagen procesada (28x28)**")
-
-            imagen_ampliada = procesada.resize(
-                (280, 280),
-                Image.Resampling.NEAREST
-            )
-
-            st.image(
-                imagen_ampliada,
-                caption="Entrada de la red neuronal",
-                use_container_width=True
-            )
+with col2:
+    st.write("**Imagen procesada (28x28)**")
+    st.image(
+        buffer_procesada.getvalue(),
+        caption="Entrada de la red neuronal",
+        width="stretch"
+    )
 
         # ----------------------------------
         # DIAGNOSTICO
