@@ -44,7 +44,7 @@ def load_model():
 
 try:
     model = load_model()
-    st.success("Red neuronal cargada correctamente.")
+    st.success("Red neuronal cargada correctamente.v2")
 except Exception as e:
     st.error(f"Error al cargar el modelo: {e}")
     st.stop()
@@ -197,27 +197,39 @@ if archivo is not None:
             st.stop()
 
         procesada, entrada = procesar_imagen(original)
+        st.write("### Diagnóstico de la imagen")
 
+st.write("Dimensiones:", procesada.size)
+st.write("Valor mínimo:", float(np.min(entrada)))
+st.write("Valor máximo:", float(np.max(entrada)))
+st.write("Promedio:", float(np.mean(entrada)))
         # Mostrar imágenes
         st.markdown("### Procesamiento de imagen")
 
         col1, col2 = st.columns(2)
 
+
         with col1:
             st.write("Imagen original")
             st.image(
-                np.asarray(original),
-                channels="RGB",
+                original,
+                caption="Imagen subida",
+                output_format="PNG",
                 use_container_width=True
             )
-
+        
         with col2:
             st.write("Imagen procesada (28x28)")
             st.image(
-                np.asarray(procesada),
-                clamp=True,
+                procesada.resize(
+                    (280, 280),
+                    Image.Resampling.NEAREST
+                ),
+                caption="Entrada de la red neuronal",
+                output_format="PNG",
                 use_container_width=True
             )
+
 
         # --------------------------------
         # PREDICCIÓN
