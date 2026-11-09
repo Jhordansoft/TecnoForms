@@ -7,716 +7,321 @@ from PIL import Image, ImageOps
 from pathlib import Path
 from io import BytesIO
 
-
-# =====================================================
-# 1. CONFIGURACIÓN GENERAL
-# =====================================================
+# ==========================================
+# CONFIGURACIÓN
+# ==========================================
 
 st.set_page_config(
-    page_title="TecnoForms de Jhordan | Trabajo Final",
+    page_title="TecnoForms de Jhordan (Trabajo Final)",
     page_icon="🔢",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    layout="centered"
 )
 
-BASE_DIR = Path(__file__).parent
-MODEL_PATH = BASE_DIR / "modelo_digitos.keras"
+st.title("🔢 TecnoForms de Jhordan")
+st.subheader("Trabajo Final | Clasificación de Dígitos Manuscritos")
 
+st.write(
+    "Sistema de reconocimiento automático de números manuscritos "
+    "mediante redes neuronales convolucionales (CNN)."
+)
 
-# =====================================================
-# 2. ESTILOS CSS
-# =====================================================
+st.divider()
 
-st.markdown("""
-<style>
+# ==========================================
+# CARGAR MODELO
+# ==========================================
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
+@st.cache_resource
+def cargar_modelo():
+    ruta = Path(__file__).parent / "modelo_digitos.keras"
 
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
+    if not ruta.exists():
+        raise FileNotFoundError("No se encontró modelo_digitos.keras")
 
-.stApp {
-    background:
-        radial-gradient(ellipse at 10% 0%, #172554 0%, transparent 35%),
-        #080d19;
-    color: #f1f5f9;
-}
+    modelo = tf.keras.models.load_model(ruta, compile=False)
 
-.block-container {
-    max-width: 1150px;
-    padding-top: 2rem;
-    padding-bottom: 3rem;
-}
+    if tuple(modelo.input_shape[1:]) != (28, 28, 1):
+        raise ValueError("El modelo no tiene la entrada esperada de MNIST.")
 
-.hero {
-    background: linear-gradient(120deg, #172554, #172044, #102b3b);
-    border: 1px solid #334b78;
-    padding: 32px;
-    border-radius: 20px;
-    margin-bottom: 25px;
-}
-
-.brand {
-    color: #67e8f9;
-    font-size: 13px;
-    font-weight: 800;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-}
-
-.hero h1 {
-    color: white;
-    font-size: clamp(30px, 5vw, 46px);
-    font-weight: 800;
-    margin: 12px 0;
-}
-
-.hero p {
-    color: #cbd5e1;
-    font-size: 16px;
-    margin-bottom: 0;
-}
-
-.section-title {
-    font-size: 22px;
-    font-weight: 800;
-    color: #f8fafc;
-    margin: 25px 0 14px;
-}
-
-.panel {
-    background: #111b2d;
-    border: 1px solid #27364d;
-    border-radius: 16px;
-    padding: 20px;
-}
-
-.result-card {
-    background: linear-gradient(135deg, #102e3d, #13283b);
-    border: 1px solid #256477;
-    padding: 25px;
-    border-radius: 18px;
-    text-align: center;
-}
-
-.result-number {
-    font-size: 90px;
-    font-weight: 800;
-    color: #67e8f9;
-    line-height: 1.2;
-}
-
-.result-label {
-    color: #cbd5e1;
-    font-size: 14px;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-}
-
-.confidence {
-    color: #a5f3fc;
-    font-size: 17px;
-    font-weight: 700;
-    margin-top: 8px;
-}
-
-div[data-testid="stFileUploader"] {
-    background: #111b2d;
-    border: 1px dashed #4b6588;
-    border-radius: 15px;
-    padding: 15px;
-}
-
-div[data-testid="stFileUploader"] label {
-    color: white;
-}
-
-.stButton button {
-    background: linear-gradient(90deg, #0891b2, #2563eb);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    font-weight: 700;
-    width: 100%;
-    min-height: 45px;
-}
-
-.stButton button:hover {
-    border: 1px solid #67e8f9;
-    color: white;
-}
-
-div[data-testid="stMetric"] {
-    background: #111b2d;
-    border: 1px solid #27364d;
-    border-radius: 13px;
-    padding: 15px;
-}
-
-footer {
-    visibility: hidden;
-}
-
-#MainMenu {
-    visibility: hidden;
-}
-
-</style>
-""", unsafe_allow_html=True)
-
-
-# =====================================================
-# 3. ENCABEZADO
-# =====================================================
-
-st.markdown("""
-<div class="hero">
-
-    <div class="brand">Inteligencia Artificial · Deep Learning</div>
-
-    <h1>TECNOFORMS</h1>
-
-    <p>
-        <strong>de Jhordan (Trabajo Final)</strong>
-        <br><br>
-        Sistema inteligente de reconocimiento y clasificación
-        de dígitos manuscritos mediante redes neuronales convolucionales.
-    </p>
-
-</div>
-""", unsafe_allow_html=True)
-
-
-# =====================================================
-# 4. CARGA DEL MODELO
-# =====================================================
-
-@st.cache_resource(show_spinner="Cargando red neuronal...")
-def load_trained_model():
-
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            "No se encontró modelo_digitos.keras. "
-            "Comprueba que esté en el repositorio."
-        )
-
-    loaded_model = tf.keras.models.load_model(
-        MODEL_PATH,
-        compile=False
-    )
-
-    expected_shape = loaded_model.input_shape
-
-    if len(expected_shape) != 4 or tuple(expected_shape[1:]) != (28, 28, 1):
-        raise ValueError(
-            f"Arquitectura incompatible. Entrada esperada: "
-            f"(None, 28, 28, 1). Entrada encontrada: {expected_shape}"
-        )
-
-    return loaded_model
+    return modelo
 
 
 try:
-    model = load_trained_model()
+    model = cargar_modelo()
+    st.success("Sistema listo. Modelo cargado correctamente.")
 
-    st.success("● Sistema operativo: red neuronal cargada correctamente")
-
-except Exception as error:
-    st.error("No fue posible iniciar el sistema.")
-    st.code(str(error))
-    st.info(
-        "Verifica que modelo_digitos.keras exista y que la versión "
-        "de TensorFlow sea compatible con la utilizada durante el entrenamiento."
-    )
+except Exception as e:
+    st.error(f"Error al cargar el modelo: {e}")
     st.stop()
 
 
-# =====================================================
-# 5. UMBRAL AUTOMÁTICO DE OTSU
-# =====================================================
+# ==========================================
+# PREPROCESAMIENTO
+# ==========================================
 
-def otsu_threshold(image):
+def procesar_imagen(imagen):
 
-    pixels = np.asarray(image, dtype=np.uint8)
+    # Convertir a escala de grises
+    imagen = ImageOps.grayscale(imagen)
+    imagen = ImageOps.autocontrast(imagen)
 
-    histogram = np.bincount(
-        pixels.ravel(),
-        minlength=256
-    )
+    pixeles = np.array(imagen)
 
-    total = pixels.size
-    total_sum = np.dot(np.arange(256), histogram)
-
-    background_weight = 0
-    background_sum = 0
-
-    best_variance = -1
-    best_threshold = 127
-
-    for threshold in range(256):
-
-        background_weight += histogram[threshold]
-
-        if background_weight == 0:
-            continue
-
-        foreground_weight = total - background_weight
-
-        if foreground_weight == 0:
-            break
-
-        background_sum += threshold * histogram[threshold]
-
-        background_mean = background_sum / background_weight
-
-        foreground_mean = (
-            total_sum - background_sum
-        ) / foreground_weight
-
-        variance = (
-            background_weight *
-            foreground_weight *
-            (background_mean - foreground_mean) ** 2
-        )
-
-        if variance > best_variance:
-
-            best_variance = variance
-            best_threshold = threshold
-
-    return best_threshold
-
-
-# =====================================================
-# 6. CENTRADO DEL DÍGITO
-# =====================================================
-
-def center_digit(canvas):
-
-    array = np.asarray(canvas, dtype=np.float32)
-
-    total_mass = array.sum()
-
-    if total_mass <= 0:
-        raise ValueError("No se detectaron trazos en la imagen.")
-
-    y_grid, x_grid = np.indices(array.shape)
-
-    center_x = (array * x_grid).sum() / total_mass
-    center_y = (array * y_grid).sum() / total_mass
-
-    shift_x = int(round(13.5 - center_x))
-    shift_y = int(round(13.5 - center_y))
-
-    shifted = Image.new("L", (28, 28), 0)
-
-    shifted.paste(
-        canvas,
-        (shift_x, shift_y)
-    )
-
-    return shifted
-
-
-# =====================================================
-# 7. PREPROCESAMIENTO DE IMAGEN
-# =====================================================
-
-def preprocess_image(original):
-
-    # Manejar transparencias y convertir a escala de grises
-    if original.mode in ("RGBA", "LA"):
-
-        rgba = original.convert("RGBA")
-
-        background = Image.new(
-            "RGBA",
-            rgba.size,
-            (255, 255, 255, 255)
-        )
-
-        original = Image.alpha_composite(
-            background,
-            rgba
-        ).convert("RGB")
-
-    else:
-        original = original.convert("RGB")
-
-    gray = ImageOps.grayscale(original)
-
-    # Mejorar contraste
-    gray = ImageOps.autocontrast(gray)
-
-    pixels = np.asarray(gray)
-
-    # Analizar los bordes para determinar el fondo
-    border = np.concatenate([
-        pixels[0, :],
-        pixels[-1, :],
-        pixels[:, 0],
-        pixels[:, -1]
+    # Detectar el color del fondo mediante los bordes
+    bordes = np.concatenate([
+        pixeles[0, :],
+        pixeles[-1, :],
+        pixeles[:, 0],
+        pixeles[:, -1]
     ])
 
-    # Adaptar la polaridad al formato MNIST:
-    # fondo negro y trazos blancos
-    if np.median(border) > 127:
-        gray = ImageOps.invert(gray)
+    # MNIST: fondo negro y número blanco
+    if np.median(bordes) > 127:
+        imagen = ImageOps.invert(imagen)
 
-    # Umbral automático
-    threshold = otsu_threshold(gray)
+    pixeles = np.array(imagen)
 
-    # Máscara para localizar los trazos
-    mask = gray.point(
-        lambda value: 255 if value > threshold else 0
+    # Detectar los trazos
+    umbral = max(30, otsu(imagen))
+
+    mascara = imagen.point(
+        lambda p: 255 if p > umbral else 0
     )
 
-    bbox = mask.getbbox()
+    caja = mascara.getbbox()
 
-    if bbox is None:
-        raise ValueError(
-            "No se pudo detectar ningún número. "
-            "Sube una imagen con mejor iluminación y contraste."
-        )
+    if caja is None:
+        raise ValueError("No se detectó ningún número.")
 
     # Recortar el dígito
-    digit = gray.crop(bbox)
+    digito = imagen.crop(caja)
 
-    width, height = digit.size
+    ancho, alto = digito.size
 
-    if width < 2 or height < 2:
-        raise ValueError("El número detectado es demasiado pequeño.")
+    # Mantener proporciones y ajustar a 20x20
+    escala = min(20 / ancho, 20 / alto)
 
-    # Mantener las proporciones y ajustar a 20x20
-    scale = min(
-        20 / width,
-        20 / height
-    )
+    nuevo_ancho = max(1, round(ancho * escala))
+    nuevo_alto = max(1, round(alto * escala))
 
-    new_width = max(1, round(width * scale))
-    new_height = max(1, round(height * scale))
-
-    digit = digit.resize(
-        (new_width, new_height),
+    digito = digito.resize(
+        (nuevo_ancho, nuevo_alto),
         Image.Resampling.LANCZOS
     )
 
-    # Lienzo de 28x28 con fondo negro
-    canvas = Image.new(
-        "L",
-        (28, 28),
-        0
+    # Crear imagen MNIST de 28x28
+    lienzo = Image.new("L", (28, 28), 0)
+
+    x = (28 - nuevo_ancho) // 2
+    y = (28 - nuevo_alto) // 2
+
+    lienzo.paste(digito, (x, y))
+
+    # Centrar según el centro de masa
+    array = np.array(lienzo, dtype=np.float32)
+
+    masa = array.sum()
+
+    if masa == 0:
+        raise ValueError("La imagen está vacía.")
+
+    yy, xx = np.indices(array.shape)
+
+    cx = (array * xx).sum() / masa
+    cy = (array * yy).sum() / masa
+
+    desplazamiento_x = round(13.5 - cx)
+    desplazamiento_y = round(13.5 - cy)
+
+    centrada = Image.new("L", (28, 28), 0)
+
+    centrada.paste(
+        lienzo,
+        (desplazamiento_x, desplazamiento_y)
     )
 
-    x = (28 - new_width) // 2
-    y = (28 - new_height) // 2
-
-    canvas.paste(digit, (x, y))
-
-    # Centrar según la distribución de los píxeles
-    canvas = center_digit(canvas)
-
-    # Normalización entre 0 y 1
-    array = np.asarray(
-        canvas,
+    # Normalizar entre 0 y 1
+    entrada = np.array(
+        centrada,
         dtype=np.float32
     ) / 255.0
 
-    # Dimensiones compatibles con CNN
-    array = np.expand_dims(
-        array,
-        axis=(0, -1)
+    entrada = entrada.reshape(1, 28, 28, 1)
+
+    return centrada, entrada
+
+
+# ==========================================
+# UMBRAL DE OTSU
+# ==========================================
+
+def otsu(imagen):
+
+    pixeles = np.array(imagen)
+
+    histograma = np.bincount(
+        pixeles.ravel(),
+        minlength=256
     )
 
-    return canvas, array
+    total = pixeles.size
+    suma_total = np.dot(np.arange(256), histograma)
+
+    peso_fondo = 0
+    suma_fondo = 0
+    mejor_varianza = -1
+    mejor_umbral = 127
+
+    for i in range(256):
+
+        peso_fondo += histograma[i]
+
+        if peso_fondo == 0:
+            continue
+
+        peso_objeto = total - peso_fondo
+
+        if peso_objeto == 0:
+            break
+
+        suma_fondo += i * histograma[i]
+
+        media_fondo = suma_fondo / peso_fondo
+        media_objeto = (
+            suma_total - suma_fondo
+        ) / peso_objeto
+
+        varianza = (
+            peso_fondo * peso_objeto *
+            (media_fondo - media_objeto) ** 2
+        )
+
+        if varianza > mejor_varianza:
+            mejor_varianza = varianza
+            mejor_umbral = i
+
+    return mejor_umbral
 
 
-# =====================================================
-# 8. INFORMACIÓN DEL SISTEMA
-# =====================================================
+# ==========================================
+# SUBIR IMAGEN
+# ==========================================
 
-st.markdown("""
-<div class="section-title">Panel de reconocimiento</div>
-""", unsafe_allow_html=True)
+st.subheader("1. Subir imagen")
 
-col1, col2, col3 = st.columns(3)
+st.write("Selecciona una imagen que contenga un solo dígito.")
 
-with col1:
-    st.metric("Modelo", "CNN")
-
-with col2:
-    st.metric("Clases", "10 dígitos")
-
-with col3:
-    st.metric("Entrada", "28 × 28 px")
-
-
-# =====================================================
-# 9. CARGA DE IMAGEN
-# =====================================================
-
-st.markdown("""
-<div class="section-title">01 · Seleccionar imagen</div>
-""", unsafe_allow_html=True)
-
-st.write(
-    "Carga una imagen que contenga un solo número manuscrito. "
-    "Se recomienda utilizar tinta oscura sobre papel claro, "
-    "con buena iluminación y sin sombras."
+archivo = st.file_uploader(
+    "Seleccionar imagen",
+    type=["png", "jpg", "jpeg"]
 )
 
-uploaded_file = st.file_uploader(
-    "Selecciona tu imagen",
-    type=["png", "jpg", "jpeg"],
-    accept_multiple_files=False
-)
 
+# ==========================================
+# RECONOCIMIENTO
+# ==========================================
 
-# =====================================================
-# 10. PROCESAMIENTO Y PREDICCIÓN
-# =====================================================
-
-if uploaded_file is not None:
+if archivo is not None:
 
     try:
 
-        if len(uploaded_file.getvalue()) > 10 * 1024 * 1024:
-            raise ValueError(
-                "El archivo supera el límite de 10 MB."
-            )
+        if len(archivo.getvalue()) > 10 * 1024 * 1024:
+            raise ValueError("La imagen supera los 10 MB.")
 
-        # Abrir imagen de forma segura
         original = Image.open(
-            BytesIO(uploaded_file.getvalue())
+            BytesIO(archivo.getvalue())
         )
 
         original.load()
 
         if original.width * original.height > 12_000_000:
-            raise ValueError(
-                "La imagen tiene demasiados píxeles. "
-                "Utiliza una imagen de menor resolución."
-            )
+            raise ValueError("La resolución de la imagen es demasiado grande.")
 
-        # Procesar imagen
-        processed_image, input_array = preprocess_image(original)
+        original = ImageOps.exif_transpose(original)
 
-        st.markdown("""
-        <div class="section-title">02 · Procesamiento de imagen</div>
-        """, unsafe_allow_html=True)
+        # Mostrar original antes de procesar
+        st.subheader("2. Imagen original")
 
-        col_original, col_processed = st.columns(2)
-
-        with col_original:
-
-            st.markdown("**Imagen original**")
-
-            st.image(
-                original,
-                caption=f"{original.width} × {original.height} píxeles",
-                use_container_width=True
-            )
-
-        with col_processed:
-
-            st.markdown("**Imagen procesada**")
-
-            st.image(
-                processed_image.resize(
-                    (280, 280),
-                    Image.Resampling.NEAREST
-                ),
-                caption="28 × 28 píxeles · Escala de grises",
-                use_container_width=True
-            )
-
-        # Comprobar entrada
-        if not np.isfinite(input_array).all():
-            raise ValueError("La imagen contiene valores no válidos.")
-
-        if input_array.shape != (1, 28, 28, 1):
-            raise ValueError("Las dimensiones de entrada son incorrectas.")
-
-        # Predicción
-        with st.spinner("Analizando características del dígito..."):
-
-            predictions = model.predict(
-                input_array,
-                verbose=0
-            )[0]
-
-        if predictions.shape != (10,):
-            raise ValueError("El modelo no devuelve diez clases.")
-
-        if not np.isfinite(predictions).all():
-            raise ValueError("El modelo generó resultados no válidos.")
-
-        if np.any(predictions < 0) or np.any(predictions > 1):
-            raise ValueError("Las probabilidades generadas no son válidas.")
-
-        if not np.isclose(np.sum(predictions), 1.0, atol=0.02):
-            raise ValueError("La salida del modelo no tiene probabilidades normalizadas.")
-
-        # Obtener resultado
-        predicted_digit = int(np.argmax(predictions))
-
-        confidence = float(
-            predictions[predicted_digit] * 100
-        )
-
-        # =================================================
-        # 11. RESULTADO
-        # =================================================
-
-        st.markdown("""
-        <div class="section-title">03 · Resultado del reconocimiento</div>
-        """, unsafe_allow_html=True)
-
-        st.markdown(f"""
-        <div class="result-card">
-
-            <div class="result-label">Dígito identificado</div>
-
-            <div class="result-number">{predicted_digit}</div>
-
-            <div class="confidence">
-                Confianza del modelo: {confidence:.2f}%
-            </div>
-
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.write("")
-
-        if confidence >= 80:
-
-            st.success(
-                "El modelo presenta una confianza alta en esta predicción."
-            )
-
-        elif confidence >= 50:
-
-            st.warning(
-                "La confianza es moderada. Se recomienda verificar el resultado."
-            )
-
-        else:
-
-            st.error(
-                "Confianza baja. El modelo no puede identificar "
-                "este número con suficiente seguridad."
-            )
-
-        # =================================================
-        # 12. PROBABILIDADES
-        # =================================================
-
-        st.markdown("""
-        <div class="section-title">04 · Distribución de probabilidades</div>
-        """, unsafe_allow_html=True)
-
-        chart_data = {
-            "Dígito": [str(i) for i in range(10)],
-            "Probabilidad (%)": [
-                float(predictions[i] * 100)
-                for i in range(10)
-            ]
-        }
-
-        st.bar_chart(
-            chart_data,
-            x="Dígito",
-            y="Probabilidad (%)",
-            height=300
-        )
-
-        # =================================================
-        # 13. TRES MEJORES PREDICCIONES
-        # =================================================
-
-        st.markdown("""
-        <div class="section-title">05 · Predicciones alternativas</div>
-        """, unsafe_allow_html=True)
-
-        best_predictions = np.argsort(
-            predictions
-        )[-3:][::-1]
-
-        columns = st.columns(3)
-
-        for index, digit in enumerate(best_predictions):
-
-            with columns[index]:
-
-                st.metric(
-                    label=f"Posición {index + 1}",
-                    value=str(int(digit)),
-                    delta=f"{predictions[digit] * 100:.2f}%"
-                )
-
-        # =================================================
-        # 14. DESCARGAR IMAGEN PROCESADA
-        # =================================================
-
-        buffer = BytesIO()
-
-        processed_image.save(
-            buffer,
-            format="PNG"
-        )
-
-        st.download_button(
-            label="Descargar imagen procesada",
-            data=buffer.getvalue(),
-            file_name="digito_procesado.png",
-            mime="image/png",
+        st.image(
+            original,
+            caption="Imagen subida por el usuario",
             use_container_width=True
         )
 
-    except Exception as error:
+        # Procesamiento
+        procesada, entrada = procesar_imagen(original)
 
-        st.error(
-            f"No fue posible procesar la imagen: {error}"
+        st.subheader("3. Imagen procesada")
+
+        st.image(
+            procesada.resize(
+                (280, 280),
+                Image.Resampling.NEAREST
+            ),
+            caption="Imagen adaptada a 28 × 28 píxeles",
+            use_container_width=False
         )
 
-        st.info(
-            "Intenta utilizar una imagen donde el número esté "
-            "completo, centrado, bien iluminado y separado de otros elementos."
+        # Predicción
+        st.subheader("4. Resultado")
+
+        predicciones = model.predict(
+            entrada,
+            verbose=0
+        )[0]
+
+        if predicciones.shape != (10,) or not np.isfinite(predicciones).all():
+            raise ValueError("El modelo produjo resultados no válidos.")
+
+        numero = int(np.argmax(predicciones))
+        confianza = float(predicciones[numero] * 100)
+
+        st.success(f"### Número reconocido: {numero}")
+
+        st.metric(
+            "Confianza de la predicción",
+            f"{confianza:.2f}%"
         )
 
+        if confianza >= 80:
+            st.success("Confianza alta.")
+        elif confianza >= 50:
+            st.warning("Confianza moderada. Verifica el resultado.")
+        else:
+            st.error("Confianza baja. Se recomienda revisar la imagen.")
 
-# =====================================================
-# 15. PIE DE PÁGINA
-# =====================================================
+        # Probabilidades
+        st.subheader("5. Probabilidades por número")
+
+        datos = {
+            str(i): float(predicciones[i] * 100)
+            for i in range(10)
+        }
+
+        st.bar_chart(datos)
+
+        # Descargar imagen procesada
+        buffer = BytesIO()
+        procesada.save(buffer, format="PNG")
+
+        st.download_button(
+            "Descargar imagen procesada",
+            data=buffer.getvalue(),
+            file_name="imagen_procesada.png",
+            mime="image/png"
+        )
+
+    except Exception as e:
+        st.error(f"Error al procesar la imagen: {e}")
+
+
+# ==========================================
+# PIE DE PÁGINA
+# ==========================================
 
 st.divider()
 
-st.markdown("""
-<div style="
-    text-align:center;
-    padding:20px;
-    color:#94a3b8;
-">
-
-    <div style="
-        color:#67e8f9;
-        font-size:18px;
-        font-weight:800;
-        letter-spacing:2px;
-    ">
-        TECNOFORMS
-    </div>
-
-    <p>
-        de Jhordan · Trabajo Final
-    </p>
-
-    <p style="font-size:12px;">
-        Clasificación de Dígitos Manuscritos
-        <br>
-        Desarrollado con Python, TensorFlow, Keras y Streamlit
-    </p>
-
-</div>
-""", unsafe_allow_html=True)
+st.caption(
+    "TecnoForms de Jhordan | Trabajo Final | "
+    "Python · TensorFlow · Keras · Streamlit"
+)
